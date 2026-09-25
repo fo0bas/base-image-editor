@@ -24,14 +24,15 @@ from PyQt5.QtWidgets import (
     QScrollArea, QGridLayout, QFrame, QColorDialog, QSpinBox,
     QDialog, QDialogButtonBox, QFormLayout, QFontComboBox, QLineEdit,
     QSlider, QDoubleSpinBox, QInputDialog, QMenu, QComboBox,
-    QToolBar, QAction
+    QToolBar, QAction, QTextEdit
 )
 from PyQt5.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush, QFont,
-    QIcon, QTransform, QFontDatabase, QFontMetrics, QPalette
+    QIcon, QTransform, QFontDatabase, QFontMetrics, QPalette,
+    QTextOption
 )
 from PyQt5.QtCore import (
-    Qt, QPoint, QRect, QSize, pyqtSignal, QEvent, QTimer
+    Qt, QPoint, QRect, QRectF, QSize, pyqtSignal, QEvent, QTimer
 )
 
 # ---------- Пути ----------
@@ -46,8 +47,6 @@ REQUIRED_DIRS = [FONT_DIR, SAVE_DIR, DONE_DIR]
 
 
 def ensure_dirs():
-    """Проверяет наличие рабочих папок и создаёт отсутствующие.
-    Возвращает список путей, которые были созданы в этот раз."""
     created = []
     for d in REQUIRED_DIRS:
         if not os.path.isdir(d):
@@ -160,6 +159,22 @@ def make_icon(name, size=28, color="#e0e0e0"):
         p.drawArc(6, 6, s - 12, s - 12, 30 * 16, 270 * 16)
         p.setBrush(QColor(color))
         p.drawPolygon(QPoint(s - 6, 6), QPoint(s - 12, 10), QPoint(s - 6, 14))
+    p.end()
+    return QIcon(pix)
+
+
+def make_info_icon(size=48, color="#5a9cff"):
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QPen(QColor(color), 3))
+    p.setBrush(QBrush(QColor(40, 60, 90, 200)))
+    p.drawEllipse(3, 3, size - 6, size - 6)
+    f = QFont("Georgia", int(size * 0.6), QFont.Bold)
+    p.setFont(f)
+    p.setPen(QColor(color))
+    p.drawText(pix.rect(), Qt.AlignCenter, "i")
     p.end()
     return QIcon(pix)
 
@@ -326,10 +341,23 @@ class TextItem(BaseItem):
         self.color = color
         self.bold = False
         self.italic = False
-        f = QFont(font_family, font_size)
+        self._recalc_base()
+
+    def _make_font(self, size=None):
+        f = QFont(self.font_family, size if size else self.font_size)
+        f.setBold(self.bold)
+        f.setItalic(self.italic)
+        return f
+
+    def _recalc_base(self):
+        f = self._make_font()
         m = QFontMetrics(f)
-        self.base_w = m.horizontalAdvance(text) + 10
-        self.base_h = m.height() + 6
+        lines = self.text.split("\n") if self.text else [""]
+        max_w = max((m.horizontalAdvance(line) for line in lines), default=0)
+        line_h = m.lineSpacing()
+        total_h = line_h * len(lines)
+        self.base_w = max_w + 10
+        self.base_h = total_h + 6
 
     def clone(self):
         it = TextItem(self.text, self.font_family, self.font_size,
@@ -351,17 +379,61 @@ class TextItem(BaseItem):
     def draw(self, p: QPainter):
         scale = self.display_size.width() / self.base_w if self.base_w else 1.0
         size = max(6, int(self.font_size * scale))
-        f = QFont(self.font_family, size)
-        f.setBold(self.bold)
-        f.setItalic(self.italic)
+        f = self._make_font(size)
         target = self.rect()
         p.save()
         p.setOpacity(self.opacity)
         self._apply_transform(p, target)
         p.setFont(f)
         p.setPen(self.color)
-        p.drawText(target, Qt.AlignLeft | Qt.AlignVCenter, self.text)
+        opt = QTextOption(Qt.AlignLeft | Qt.AlignVCenter)
+        opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        p.drawText(QRectF(target), self.text, opt)
         p.restore()
+
+    def set_text_inline(self, new_text: str):
+        if new_text == self.text:
+            return
+        old_base_w = self.base_w
+        self.text = new_text
+        self._recalc_base()
+        if old_base_w > 0 and self.base_w > 0:
+            ratio_w = self.base_w / old_base_w
+            new_w = max(10, int(self.display_size.width() * ratio_w))
+        else:
+            new_w = self.base_w
+        if self.base_w > 0:
+            scale = new_w / self.base_w
+            new_h = max(10, int(self.base_h * scale))
+        else:
+            new_h = self.base_h
+        self.display_size = QSize(new_w, new_h)
+
+    def apply_edit(self, text=None, font_family=None, font_size=None,
+                   color=None, bold=None, italic=None):
+        old_base_w = self.base_w
+        if text is not None:
+            self.text = text
+        if font_family is not None:
+            self.font_family = font_family
+        if font_size is not None:
+            self.font_size = font_size
+        if color is not None:
+            self.color = QColor(color)
+        if bold is not None:
+            self.bold = bold
+        if italic is not None:
+            self.italic = italic
+
+        self._recalc_base()
+
+        if old_base_w > 0 and self.base_w > 0:
+            ratio = self.base_w / old_base_w
+            new_w = max(10, int(self.display_size.width() * ratio))
+            new_h = max(10, int(new_w * self.base_h / self.base_w))
+            self.display_size = QSize(new_w, new_h)
+        else:
+            self.display_size = QSize(self.base_w, self.base_h)
 
 
 # ============================================================
@@ -370,14 +442,19 @@ class TextItem(BaseItem):
 class Canvas(QWidget):
     item_selected = pyqtSignal(object)
     document_changed = pyqtSignal()
+    request_edit_text = pyqtSignal(object)
 
     HANDLE = 10
+    DOUBLE_CLICK_MS = 350
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAcceptDrops(True)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+
         self.doc_size = QSize(800, 600)
         self.bg_color = Qt.transparent
         self.items = []
@@ -397,7 +474,165 @@ class Canvas(QWidget):
         self.move_snapshot_done = False
         self.history = []
         self.clipboard = []
+        self._last_click_time = 0
+        self._last_click_item = None
+        self._last_click_pos = QPoint()
 
+        # ---- inline-редактирование текста ----
+        self.inline_edit = None
+        self.inline_item = None
+        self._inline_committing = False
+
+    # ============================================================
+    #              INLINE-РЕДАКТИРОВАНИЕ ТЕКСТА
+    # ============================================================
+    def start_inline_edit(self, item: TextItem):
+        if self.inline_edit is not None:
+            self.commit_inline_edit()
+        if item is None or item.kind != "text":
+            return
+
+        self.inline_item = item
+        self.inline_edit = QTextEdit(self)
+        self.inline_edit.setPlainText(item.text)
+        self.inline_edit.setStyleSheet(
+            "QTextEdit{"
+            "  background:#1e2a3a;"
+            "  color:#fff;"
+            "  border:2px solid #5a9cff;"
+            "  border-radius:4px;"
+            "  padding:2px 6px;"
+            "  selection-background-color:#5a9cff;"
+            "}")
+
+        scale = self.zoom
+        font_size_px = max(8, int(item.font_size *
+                                  item.display_size.width() /
+                                  max(1, item.base_w) * scale))
+        f = QFont(item.font_family)
+        f.setPixelSize(font_size_px)
+        f.setBold(item.bold)
+        f.setItalic(item.italic)
+        self.inline_edit.setFont(f)
+        self.inline_edit.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+
+        dr = self.doc_rect()
+        x = int(item.pos.x() * self.zoom) + dr.x()
+        y = int(item.pos.y() * self.zoom) + dr.y()
+        w = max(180, int(item.display_size.width() * self.zoom) + 40)
+        h = max(40, int(item.display_size.height() * self.zoom) + 20)
+        self.inline_edit.setGeometry(x, y, w, h)
+
+        self.inline_edit.setFocus()
+        self.inline_edit.selectAll()
+
+        self.inline_edit.focusOutEvent = self._inline_focus_out
+        self.inline_edit.show()
+
+    def _inline_focus_out(self, event):
+        QTimer.singleShot(0, self.commit_inline_edit)
+        QTextEdit.focusOutEvent(self.inline_edit, event)
+
+    def commit_inline_edit(self):
+        if self._inline_committing:
+            return
+        self._inline_committing = True
+        try:
+            if self.inline_edit is None or self.inline_item is None:
+                return
+            new_text = self.inline_edit.toPlainText()
+            item = self.inline_item
+
+            if new_text.strip() and new_text != item.text:
+                self.push_history()
+                item.set_text_inline(new_text)
+                self.document_changed.emit()
+
+            self.inline_edit.hide()
+            self.inline_edit.deleteLater()
+            self.inline_edit = None
+            self.inline_item = None
+            self.setFocus()
+            self.update()
+        finally:
+            self._inline_committing = False
+
+    def cancel_inline_edit(self):
+        if self.inline_edit is None:
+            return
+        self._inline_committing = True
+        try:
+            self.inline_edit.hide()
+            self.inline_edit.deleteLater()
+            self.inline_edit = None
+            self.inline_item = None
+            self.setFocus()
+            self.update()
+        finally:
+            self._inline_committing = False
+
+    def _handle_inline_key(self, event):
+        if self.inline_edit is None:
+            return False
+        key = event.key()
+        mods = event.modifiers()
+        if key == Qt.Key_Escape:
+            self.cancel_inline_edit()
+            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter) and (mods & Qt.ControlModifier):
+            self.commit_inline_edit()
+            return True
+        return False
+
+    # ============================================================
+    #              КОНТЕКСТНОЕ МЕНЮ
+    # ============================================================
+    def _show_context_menu(self, pos):
+        if self.inline_edit is not None:
+            return
+        dpt = self.widget_to_doc(pos)
+        clicked = None
+        for it in reversed(self.items):
+            if it.contains(dpt):
+                clicked = it
+                break
+        if clicked is None:
+            return
+        if clicked not in self.selected_items:
+            self.select_single(clicked)
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu{background:#2b2b2b;color:#eee;border:1px solid #3a3a3a;}"
+            "QMenu::item:selected{background:#5a9cff;color:#fff;}")
+
+        if clicked.kind == "text":
+            act_inline = menu.addAction("Редактировать на холсте")
+            act_inline.triggered.connect(
+                lambda: self.start_inline_edit(clicked))
+            act_edit = menu.addAction("Настройки текста (F2)")
+            act_edit.triggered.connect(
+                lambda: self.request_edit_text.emit(clicked))
+        if clicked.kind == "image":
+            act_edit = menu.addAction("Настройки изображения (F2)")
+            act_edit.triggered.connect(
+                lambda: self.request_edit_text.emit(("image_settings", clicked)))
+        menu.addSeparator()
+        act_front = menu.addAction("На передний план")
+        act_front.triggered.connect(self.bring_to_front)
+        act_back = menu.addAction("На задний план")
+        act_back.triggered.connect(self.send_to_back)
+        menu.addSeparator()
+        act_dup = menu.addAction("Дублировать (Ctrl+D)")
+        act_dup.triggered.connect(self.duplicate_selected)
+        act_del = menu.addAction("Удалить (Del)")
+        act_del.triggered.connect(self.delete_selected)
+
+        menu.exec_(self.mapToGlobal(pos))
+
+    # ============================================================
+    #              ИСТОРИЯ
+    # ============================================================
     def push_history(self):
         self.history.append([it.clone() for it in self.items])
         if len(self.history) > 100:
@@ -415,6 +650,7 @@ class Canvas(QWidget):
         self.document_changed.emit()
 
     def new_document(self, w, h):
+        self.commit_inline_edit()
         self.doc_size = QSize(w, h)
         self.items.clear()
         self.selected_items = []
@@ -495,8 +731,11 @@ class Canvas(QWidget):
                  color=QColor(255, 255, 255)):
         f = QFont(font_family, font_size)
         m = QFontMetrics(f)
-        w = m.horizontalAdvance(text) + 10
-        h = m.height() + 6
+        lines = text.split("\n") if text else [""]
+        max_w = max((m.horizontalAdvance(line) for line in lines), default=0)
+        line_h = m.lineSpacing()
+        w = max_w + 10
+        h = line_h * len(lines) + 6
         pos = QPoint(int(self.doc_size.width() / 2 - w / 2),
                      int(self.doc_size.height() / 2 - h / 2))
         item = TextItem(text, font_family, font_size, color, pos, QSize(w, h))
@@ -527,6 +766,8 @@ class Canvas(QWidget):
     def delete_selected(self):
         if not self.selected_items:
             return
+        if self.inline_item in self.selected_items:
+            self.cancel_inline_edit()
         self.push_history()
         for it in self.selected_items:
             if it in self.items:
@@ -728,6 +969,8 @@ class Canvas(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
         for it in self.items:
+            if it is self.inline_item:
+                continue
             it.draw(p)
         p.restore()
 
@@ -735,6 +978,8 @@ class Canvas(QWidget):
         p.drawRect(dr)
 
         for it in self.selected_items:
+            if it is self.inline_item:
+                continue
             br = it.bounding_rect()
             r = QRect(int(br.x() * self.zoom) + dr.x(),
                       int(br.y() * self.zoom) + dr.y(),
@@ -755,6 +1000,8 @@ class Canvas(QWidget):
         dr = self.doc_rect()
         h = self.HANDLE
         for it in self.selected_items:
+            if it is self.inline_item:
+                continue
             br = it.bounding_rect()
             r = QRect(int(br.x() * self.zoom) + dr.x(),
                       int(br.y() * self.zoom) + dr.y(),
@@ -770,6 +1017,11 @@ class Canvas(QWidget):
     def mousePressEvent(self, event):
         pos = event.pos()
         self.setFocus()
+
+        if self.inline_edit is not None:
+            if not self.inline_edit.geometry().contains(pos):
+                self.commit_inline_edit()
+
         if event.button() == Qt.MiddleButton:
             self.mode = 'pan'
             self.pan_start = pos
@@ -798,6 +1050,22 @@ class Canvas(QWidget):
 
         ctrl = event.modifiers() & Qt.ControlModifier
 
+        now = int(time.time() * 1000)
+        is_double = (clicked is not None
+                     and clicked is self._last_click_item
+                     and (now - self._last_click_time) < self.DOUBLE_CLICK_MS)
+
+        if is_double and clicked.kind == "text":
+            self._last_click_time = 0
+            self._last_click_item = None
+            self.select_single(clicked)
+            self.start_inline_edit(clicked)
+            return
+
+        self._last_click_time = now
+        self._last_click_item = clicked
+        self._last_click_pos = dpt
+
         if clicked:
             if ctrl:
                 if clicked in self.selected_items:
@@ -825,6 +1093,9 @@ class Canvas(QWidget):
 
     def mouseMoveEvent(self, event):
         pos = event.pos()
+
+        if self.inline_edit is not None:
+            return
 
         if self.mode == 'pan':
             self.pan_offset = self.pan_offset_start + (pos - self.pan_start)
@@ -926,6 +1197,13 @@ class Canvas(QWidget):
                 self.add_image(path)
 
     def keyPressEvent(self, event):
+        if self.inline_edit is not None:
+            if self._handle_inline_key(event):
+                event.accept()
+                return
+            event.ignore()
+            return
+
         ctrl = bool(event.modifiers() & Qt.ControlModifier)
         key = event.key()
         if ctrl and key == Qt.Key_C:
@@ -955,6 +1233,17 @@ class Canvas(QWidget):
             self.duplicate_selected()
             event.accept()
             return
+        if key == Qt.Key_F2:
+            if len(self.selected_items) == 1:
+                sel = self.selected_items[0]
+                if sel.kind == "text":
+                    self.request_edit_text.emit(sel)
+                    event.accept()
+                    return
+                elif sel.kind == "image":
+                    self.request_edit_text.emit(("image_settings", sel))
+                    event.accept()
+                    return
         if key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected()
             event.accept()
@@ -1006,29 +1295,87 @@ class NewDocDialog(QDialog):
         return self.w.value(), self.h.value()
 
 
-class TextDialog(QDialog):
-    def __init__(self, parent=None):
+class TextEditDialog(QDialog):
+    def __init__(self, parent=None, item: TextItem = None):
         super().__init__(parent)
-        self.setWindowTitle("Добавить текст")
+        self.item = item
+        self.setWindowTitle("Редактирование текста" if item
+                            else "Добавить текст")
+        self.setMinimumWidth(420)
         self.setStyleSheet("background:#2b2b2b; color:#eee;")
         form = QFormLayout(self)
-        self.text = QLineEdit("Ваш текст")
-        self.text.setStyleSheet("background:#3a3a3a;color:#eee;padding:4px;")
+
+        if item:
+            init_text = item.text
+            init_family = item.font_family
+            init_size = item.font_size
+            init_color = QColor(item.color)
+            init_bold = item.bold
+            init_italic = item.italic
+        else:
+            init_text = "Ваш текст"
+            init_family = "Arial"
+            init_size = 36
+            init_color = QColor(255, 255, 255)
+            init_bold = False
+            init_italic = False
+
+        self.text = QTextEdit()
+        self.text.setPlainText(init_text)
+        self.text.setFixedHeight(80)
+        self.text.setStyleSheet(
+            "background:#3a3a3a;color:#eee;padding:6px;"
+            "border:1px solid #4a4a4a;border-radius:4px;")
+        self.text.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+
         self.font = QFontComboBox()
         self.font.setStyleSheet("background:#3a3a3a;color:#eee;padding:4px;")
+        self.font.setCurrentFont(QFont(init_family))
+
         self.size = QSpinBox()
-        self.size.setRange(8, 300)
-        self.size.setValue(36)
+        self.size.setRange(8, 500)
+        self.size.setValue(init_size)
         self.size.setStyleSheet("background:#3a3a3a;color:#eee;padding:4px;")
-        self.color = QColor(255, 255, 255)
+
+        self.color = init_color
         self.color_btn = QPushButton("Цвет текста")
         self.color_btn.setStyleSheet(
-            "background:#3a3a3a;color:#eee;padding:6px;border-radius:4px;")
+            f"background:{self.color.name()};color:#000;"
+            "padding:6px;border-radius:4px;font-weight:bold;")
         self.color_btn.clicked.connect(self.pick_color)
+
+        style_row = QHBoxLayout()
+        self.bold_btn = QPushButton("Ж")
+        self.bold_btn.setCheckable(True)
+        self.bold_btn.setChecked(init_bold)
+        self.bold_btn.setFixedWidth(40)
+        self.bold_btn.setStyleSheet(
+            "QPushButton{background:#3a3a3a;color:#eee;padding:6px;border-radius:4px;}"
+            "QPushButton:checked{background:#5a9cff;color:#fff;font-weight:bold;}")
+        self.bold_btn.setFont(QFont("Arial", 12, QFont.Bold))
+
+        self.italic_btn = QPushButton("К")
+        self.italic_btn.setCheckable(True)
+        self.italic_btn.setChecked(init_italic)
+        self.italic_btn.setFixedWidth(40)
+        self.italic_btn.setStyleSheet(
+            "QPushButton{background:#3a3a3a;color:#eee;padding:6px;border-radius:4px;}"
+            "QPushButton:checked{background:#5a9cff;color:#fff;}")
+        f = QFont("Arial", 12)
+        f.setItalic(True)
+        self.italic_btn.setFont(f)
+
+        style_row.addWidget(QLabel("Стиль:"))
+        style_row.addWidget(self.bold_btn)
+        style_row.addWidget(self.italic_btn)
+        style_row.addStretch()
+
         form.addRow("Текст:", self.text)
         form.addRow("Шрифт:", self.font)
         form.addRow("Размер:", self.size)
         form.addRow("", self.color_btn)
+        form.addRow("", style_row)
+
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -1039,11 +1386,18 @@ class TextDialog(QDialog):
         if c.isValid():
             self.color = c
             self.color_btn.setStyleSheet(
-                f"background:{c.name()};color:#000;padding:6px;border-radius:4px;")
+                f"background:{c.name()};color:#000;"
+                "padding:6px;border-radius:4px;font-weight:bold;")
 
     def values(self):
-        return (self.text.text(), self.font.currentFont().family(),
-                self.size.value(), self.color)
+        return {
+            "text": self.text.toPlainText(),
+            "font_family": self.font.currentFont().family(),
+            "font_size": self.size.value(),
+            "color": self.color,
+            "bold": self.bold_btn.isChecked(),
+            "italic": self.italic_btn.isChecked(),
+        }
 
 
 class RotateDialog(QDialog):
@@ -1140,6 +1494,139 @@ class ImageSettingsDialog(QDialog):
         self.item.rotation = self.rotation.value()
         self.item.opacity = self.opacity.value() / 100.0
         self.item._processed_key = None
+
+
+class HelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Горячие клавиши и справка")
+        self.resize(640, 680)
+        self.setStyleSheet("background:#232323; color:#eee;")
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+
+        title = QLabel("Mini Canva — справка")
+        title.setStyleSheet("color:#fff;font-size:20px;font-weight:bold;")
+        v.addWidget(title)
+
+        subtitle = QLabel("Все горячие клавиши и возможности редактора")
+        subtitle.setStyleSheet("color:#9aa;font-size:12px;")
+        v.addWidget(subtitle)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background:#1e1e1e;border:none;border-radius:6px;")
+
+        inner = QWidget()
+        inner.setStyleSheet("background:#1e1e1e;")
+        gv = QVBoxLayout(inner)
+        gv.setContentsMargins(14, 14, 14, 14)
+        gv.setSpacing(6)
+
+        sections = [
+            ("Работа с макетом", [
+                ("Новый макет", "—", "Создать холст любого размера"),
+                ("Сохранить", "—", "Сохранить результат в папку done/"),
+                ("Цвет фона", "—", "Выбрать цвет фона макета (с альфой)"),
+                ("Прозрачный фон", "—", "Сбросить фон на прозрачный"),
+            ]),
+            ("Текст", [
+                ("Двойной клик по тексту", "2x ЛКМ",
+                 "Редактировать на холсте (писать, стирать)"),
+                ("Новая строка", "Enter",
+                 "Перенос на следующую строку"),
+                ("Применить при inline", "Ctrl + Enter",
+                 "Сохранить текст и закрыть"),
+                ("Применить", "клик вне поля",
+                 "Автоматическое сохранение"),
+                ("Отменить inline-правку", "Esc",
+                 "Вернуть исходный текст"),
+                ("Расширенные настройки", "F2 / ПКМ",
+                 "Шрифт, размер, цвет, жирный / курсив"),
+            ]),
+            ("Объекты", [
+                ("Копировать", "Ctrl + C", "Копировать выделенные объекты"),
+                ("Вырезать", "Ctrl + X", "Вырезать в буфер"),
+                ("Вставить", "Ctrl + V", "Вставить из системного буфера"),
+                ("Выделить всё", "Ctrl + A", "Выделить все объекты"),
+                ("Дублировать", "Ctrl + D", "Дублировать выделенное"),
+                ("Удалить", "Del / Backspace", "Удалить выделенные объекты"),
+                ("Снять выделение", "Esc", "Снять выделение"),
+                ("Отменить", "Ctrl + Z", "Отменить последнее действие"),
+            ]),
+            ("Перемещение и масштаб", [
+                ("Перемещение", "ЛКМ + drag", "Двигать объект"),
+                ("Ресайз", "угловые ручки", "Изменить размер"),
+                ("Мультивыделение", "Ctrl + клик", "Добавить в выделение"),
+                ("Зум", "Ctrl + колесо", "Приблизить / отдалить"),
+                ("Панорама", "Средняя кнопка / колесо", "Прокрутить холст"),
+            ]),
+            ("Стили и слои", [
+                ("Слои", "кнопки в панели",
+                 "Вперёд / Назад / На передний / На задний"),
+                ("Отразить ⇋", "кнопка", "Отразить по горизонтали"),
+                ("Отразить ⇵", "кнопка", "Отразить по вертикали"),
+                ("Повернуть", "кнопка", "Повернуть на заданный угол"),
+            ]),
+            ("Полезно", [
+                ("Drag & Drop", "перетащить файл", "Добавить изображение на холст"),
+                ("Скриншот", "Win + Shift + S → Ctrl+V", "Вставить скриншот"),
+                ("Свои шрифты", "папка font/", "Кладите .ttf/.otf"),
+                ("Clipart.Free", "вкладка Хранилище", "Поиск клипартов онлайн"),
+            ]),
+        ]
+
+        for section_title, rows in sections:
+            head = QLabel(section_title)
+            head.setStyleSheet(
+                "color:#5a9cff;font-size:13px;font-weight:bold;"
+                "padding:10px 0 4px 0;")
+            gv.addWidget(head)
+
+            for label, keys, desc in rows:
+                row = QFrame()
+                row.setStyleSheet(
+                    "QFrame{background:#262626;border-radius:4px;}")
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(10, 6, 10, 6)
+                rl.setSpacing(10)
+
+                lbl_name = QLabel(label)
+                lbl_name.setStyleSheet("color:#eee;font-size:12px;")
+                lbl_name.setFixedWidth(180)
+
+                lbl_keys = QLabel(keys)
+                lbl_keys.setStyleSheet(
+                    "color:#5a9cff;font-family:Consolas,monospace;"
+                    "font-size:12px;font-weight:bold;")
+                lbl_keys.setFixedWidth(180)
+
+                lbl_desc = QLabel(desc)
+                lbl_desc.setStyleSheet("color:#999;font-size:11px;")
+                lbl_desc.setWordWrap(True)
+
+                rl.addWidget(lbl_name)
+                rl.addWidget(lbl_keys)
+                rl.addWidget(lbl_desc, 1)
+                gv.addWidget(row)
+
+        gv.addStretch()
+        scroll.setWidget(inner)
+        v.addWidget(scroll, 1)
+
+        close_btn = QPushButton("Закрыть")
+        close_btn.setStyleSheet(
+            "background:#5a9cff;color:#fff;padding:8px 24px;"
+            "border-radius:6px;font-weight:bold;font-size:13px;")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.accept)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        v.addLayout(btn_row)
 
 
 # ============================================================
@@ -1697,6 +2184,7 @@ class MainWindow(QMainWindow):
         self.fonts = self._load_fonts()
         self.canvas = Canvas()
         self.canvas.item_selected.connect(self.on_item_selected)
+        self.canvas.request_edit_text.connect(self._on_request_edit)
 
         self._build_toolbar()
 
@@ -1713,17 +2201,17 @@ class MainWindow(QMainWindow):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
 
-        props_panel = QWidget()
-        props_panel.setFixedWidth(220)
-        props_panel.setStyleSheet("background:#2b2b2b;")
-        pv = QVBoxLayout(props_panel)
-        pv.setContentsMargins(10, 14, 10, 14)
-        pv.setSpacing(8)
+        left_col = QWidget()
+        left_col.setFixedWidth(220)
+        left_col.setStyleSheet("background:#2b2b2b;")
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(10, 14, 10, 10)
+        left_layout.setSpacing(8)
 
         lbl_props = QLabel("Свойства объекта")
         lbl_props.setStyleSheet(
             "color:#eee;font-size:14px;font-weight:bold;padding-bottom:6px;")
-        pv.addWidget(lbl_props)
+        left_layout.addWidget(lbl_props)
 
         self.settings_btn = QPushButton("  Настройки изображения")
         self.settings_btn.setIcon(make_icon("image"))
@@ -1732,15 +2220,47 @@ class MainWindow(QMainWindow):
         self.settings_btn.setCursor(Qt.PointingHandCursor)
         self.settings_btn.clicked.connect(self.open_image_settings)
         self.settings_btn.setVisible(False)
-        pv.addWidget(self.settings_btn)
+        left_layout.addWidget(self.settings_btn)
+
+        self.edit_text_btn = QPushButton("  Настройки текста (F2)")
+        self.edit_text_btn.setIcon(make_icon("text"))
+        self.edit_text_btn.setIconSize(QSize(22, 22))
+        self.edit_text_btn.setStyleSheet(self._btn_style())
+        self.edit_text_btn.setCursor(Qt.PointingHandCursor)
+        self.edit_text_btn.clicked.connect(self.open_text_edit)
+        self.edit_text_btn.setVisible(False)
+        left_layout.addWidget(self.edit_text_btn)
 
         self.props_label = QLabel("Объект не выбран")
         self.props_label.setStyleSheet("color:#999;font-size:11px;")
         self.props_label.setWordWrap(True)
-        pv.addWidget(self.props_label)
+        left_layout.addWidget(self.props_label)
 
-        pv.addStretch()
-        h.addWidget(props_panel)
+        left_layout.addStretch()
+
+        info_row = QHBoxLayout()
+        info_row.setContentsMargins(0, 0, 0, 0)
+        self.info_btn = QPushButton()
+        self.info_btn.setIcon(make_info_icon(40))
+        self.info_btn.setIconSize(QSize(40, 40))
+        self.info_btn.setFixedSize(46, 46)
+        self.info_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:none;}"
+            "QPushButton:hover{background:#353535;border-radius:23px;}")
+        self.info_btn.setCursor(Qt.PointingHandCursor)
+        self.info_btn.setToolTip("Горячие клавиши и справка")
+        self.info_btn.clicked.connect(self.show_help)
+
+        self.info_label = QLabel("Справка")
+        self.info_label.setStyleSheet("color:#888;font-size:11px;")
+        self.info_label.setCursor(Qt.PointingHandCursor)
+        self.info_label.mousePressEvent = lambda ev: self.show_help()
+
+        info_row.addWidget(self.info_btn)
+        info_row.addWidget(self.info_label, 1)
+        left_layout.addLayout(info_row)
+
+        h.addWidget(left_col)
 
         canvas_wrap = QWidget()
         canvas_wrap.setStyleSheet("background:#1e1e1e;")
@@ -1761,9 +2281,8 @@ class MainWindow(QMainWindow):
         self.status.setStyleSheet("background:#2b2b2b;color:#aaa;")
 
         _DEFAULT_HINT = (
-            "Ctrl+V — вставить  •  Ctrl+C — копировать  •  "
-            "Ctrl+A — выделить всё  •  Ctrl+Z — отменить  •  "
-            "Del — удалить  •  Ctrl+колесо — зум")
+            "Двойной клик по тексту — редактировать  •  Enter — новая строка  •  "
+            "Ctrl+Enter — применить  •  Esc — отменить  •  F2 — настройки")
 
         if _CREATED_DIRS:
             rel = ", ".join(os.path.relpath(d, BASE_DIR) for d in _CREATED_DIRS)
@@ -1772,6 +2291,59 @@ class MainWindow(QMainWindow):
                               lambda: self.status.showMessage(_DEFAULT_HINT))
         else:
             self.status.showMessage(_DEFAULT_HINT)
+
+    def open_text_edit(self):
+        sel = self.canvas.selected_items
+        if len(sel) != 1 or sel[0].kind != "text":
+            return
+        item = sel[0]
+        dlg = TextEditDialog(self, item=item)
+        if dlg.exec_() == QDialog.Accepted:
+            vals = dlg.values()
+            if not vals["text"].strip():
+                return
+            self.canvas.push_history()
+            item.apply_edit(
+                text=vals["text"],
+                font_family=vals["font_family"],
+                font_size=vals["font_size"],
+                color=vals["color"],
+                bold=vals["bold"],
+                italic=vals["italic"],
+            )
+            self.canvas.select_single(item)
+            self.status.showMessage("Текст обновлён")
+
+    def _on_request_edit(self, payload):
+        if isinstance(payload, tuple) and payload and payload[0] == "image_settings":
+            item = payload[1]
+            dlg = ImageSettingsDialog(item, self)
+            if dlg.exec_() == QDialog.Accepted:
+                dlg.apply()
+                self.canvas.update()
+                self.canvas.document_changed.emit()
+            return
+        item = payload
+        dlg = TextEditDialog(self, item=item)
+        if dlg.exec_() == QDialog.Accepted:
+            vals = dlg.values()
+            if not vals["text"].strip():
+                return
+            self.canvas.push_history()
+            item.apply_edit(
+                text=vals["text"],
+                font_family=vals["font_family"],
+                font_size=vals["font_size"],
+                color=vals["color"],
+                bold=vals["bold"],
+                italic=vals["italic"],
+            )
+            self.canvas.select_single(item)
+            self.status.showMessage("Текст обновлён")
+
+    def show_help(self):
+        dlg = HelpDialog(self)
+        dlg.exec_()
 
     def _build_toolbar(self):
         tb = QToolBar("Инструменты")
@@ -1912,17 +2484,28 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Из хранилища: {os.path.basename(path)}")
 
     def add_text(self):
-        dlg = TextDialog(self)
+        dlg = TextEditDialog(self, item=None)
         if dlg.exec_() == QDialog.Accepted:
-            text, family, size, color = dlg.values()
-            if not text.strip():
+            vals = dlg.values()
+            if not vals["text"].strip():
                 return
-            self.canvas.add_text(text, family, size, color)
+            self.canvas.add_text(
+                vals["text"], vals["font_family"],
+                vals["font_size"], vals["color"])
+            if self.canvas.selected_items:
+                item = self.canvas.selected_items[0]
+                if item.kind == "text":
+                    item.bold = vals["bold"]
+                    item.italic = vals["italic"]
+                    item._recalc_base()
+                    item.display_size = QSize(item.base_w, item.base_h)
+                    self.canvas.update()
             self.status.showMessage("Текст добавлен")
 
     def save_canvas(self):
         if self.canvas.doc_size.width() == 0:
             return
+        self.canvas.commit_inline_edit()
         default = os.path.join(DONE_DIR, f"canvas_{int(time.time())}.png")
         path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить в done", default, "PNG (*.png);;JPEG (*.jpg)")
@@ -1958,30 +2541,37 @@ class MainWindow(QMainWindow):
         if item is None:
             self.props_label.setText("Объект не выбран")
             self.settings_btn.setVisible(False)
+            self.edit_text_btn.setVisible(False)
             return
         if len(self.canvas.selected_items) > 1:
             self.props_label.setText(
                 f"Выбрано объектов: {len(self.canvas.selected_items)}")
             self.settings_btn.setVisible(False)
+            self.edit_text_btn.setVisible(False)
             return
         if item.kind == "image":
             self.settings_btn.setVisible(True)
+            self.edit_text_btn.setVisible(False)
             self.props_label.setText(
                 f"Изображение\n"
                 f"Source: {item.source_size.width()}x{item.source_size.height()}\n"
                 f"Display: {item.display_size.width()}x{item.display_size.height()}\n"
                 f"Scale: {item.scale:.2f}\n"
                 f"Rotation: {item.rotation:.1f}°\n"
-                f"Flip H: {'да' if item.flip_h else 'нет'}\n"
-                f"Flip V: {'да' if item.flip_v else 'нет'}\n"
-                f"Opacity: {int(item.opacity * 100)}%"
-            )
+                f"Opacity: {int(item.opacity * 100)}%\n"
+                f"Двойной клик или F2 — настройки")
         else:
             self.settings_btn.setVisible(False)
+            self.edit_text_btn.setVisible(True)
             self.props_label.setText(
                 f"Текст: {item.text}\n"
-                f"Шрифт: {item.font_family} {item.font_size}pt\n"
-                f"Rotation: {item.rotation:.1f}°")
+                f"Шрифт: {item.font_family}\n"
+                f"Размер: {item.font_size}pt\n"
+                f"Rotation: {item.rotation:.1f}°\n"
+                f"Двойной клик — править на холсте\n"
+                f"Enter — новая строка\n"
+                f"Ctrl+Enter — применить\n"
+                f"F2 — расширенные настройки")
 
 
 def main():
