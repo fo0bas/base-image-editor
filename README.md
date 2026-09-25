@@ -1,4 +1,4 @@
-# 🎨 Mini Canva — Image Editor / Редактор изображений
+# 🎨 Base Image Editor / Редактор изображений
 
 A lightweight Canva-like image editor built with Python + PyQt5.
 Simple, fast, offline-friendly, with built-in Clipart search.
@@ -12,5 +12,7 @@ Simple, fast, offline-friendly, with built-in Clipart search.
 
 ---
 
-<img width="800" height="450" alt="2026-09-25 13-32-15" src="https://github.com/user-attachments/assets/8dcc6bd3-7e6e-4241-8a21-30faf5e1ae5b" />
+
+https://github.com/user-attachments/assets/356ee9bf-6b0e-4d7f-9d36-fbb142b5a9eb
+
 
