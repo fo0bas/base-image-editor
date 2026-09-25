@@ -1,6 +1,6 @@
-<img width="512" height="512" alt="2icon" src="https://github.com/user-attachments/assets/81d58415-dc15-434d-9161-11ff8b9816a6" />
 
-# 🎨 Base Image Editor / Редактор изображений
+
+# <img width="250" height="250" alt="2icon" src="https://github.com/user-attachments/assets/81d58415-dc15-434d-9161-11ff8b9816a6" /> Base Image Editor / Редактор изображений
 
 A lightweight Canva-like image editor built with Python + PyQt5.
 Simple, fast, offline-friendly, with built-in Clipart search.
