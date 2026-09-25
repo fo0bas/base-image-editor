@@ -1050,7 +1050,7 @@ class Canvas(QWidget):
         self.document_changed.emit()
 
     def render_to_image(self) -> QImage:
-        """Собирает полное изображение холста (фон + слой кисти + объекты)."""
+        """Собирает полное изображение холста (фон + объекты + слой кисти сверху)."""
         out = QImage(self.doc_size, QImage.Format_ARGB32)
         if self.bg_color != Qt.transparent and self.bg_color.alpha() > 0:
             out.fill(self.bg_color)
@@ -1060,9 +1060,11 @@ class Canvas(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
-        p.drawImage(0, 0, self.paint_layer)
+        # 1) объекты (изображения/текст) — под слоем кисти
         for it in self.items:
             it.draw(p)
+        # 2) слой кисти — поверх всего
+        p.drawImage(0, 0, self.paint_layer)
         p.end()
         return out
 
@@ -1091,12 +1093,15 @@ class Canvas(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
 
-        p.drawImage(0, 0, self.paint_layer)
-
+        # 1) объекты — сначала
         for it in self.items:
             if it is self.inline_item:
                 continue
             it.draw(p)
+
+        # 2) слой кисти — ПОСЛЕ объектов, поверх всего
+        p.drawImage(0, 0, self.paint_layer)
+
         p.restore()
 
         p.setPen(QPen(QColor(120, 120, 120), 1))
@@ -1801,6 +1806,7 @@ class HelpDialog(QDialog):
                  "Откроются настройки: цвет + толщина 1–30 px"),
                 ("Ластик", "кнопка",
                  "Откроются настройки: толщина 10–50 px"),
+                ("Поведение", "—", "Рисует поверх всех объектов холста"),
                 ("Отменить штрих", "Ctrl + Z", "Каждый штрих — один шаг"),
                 ("Выйти из режима", "Esc", "Вернуться в выделение"),
             ]),
@@ -1832,7 +1838,8 @@ class HelpDialog(QDialog):
                 ("Панорама", "Средняя кнопка / колесо", "Прокрутить холст"),
             ]),
             ("Стили и слои", [
-                ("Слои", "кнопки в панели", "Вперёд / Назад / На передний / На задний"),
+                ("Слои", "кнопки в панели",
+                 "Вперёд / Назад / На передний / На задний"),
                 ("Отразить гориз.", "кнопка", "Отразить по горизонтали"),
                 ("Отразить верт.", "кнопка", "Отразить по вертикали"),
                 ("Повернуть", "кнопка", "Повернуть на заданный угол"),
@@ -2614,14 +2621,12 @@ class MainWindow(QMainWindow):
 
     # ---------- BRUSH / ERASER: клик открывает настройки ----------
     def on_brush_action(self):
-        """Клик по кнопке Кисть: открываем диалог, потом активируем."""
         was_active = self.canvas.tool == "brush"
         dlg = BrushSettingsDialog(self,
                                   color=self.canvas.brush_color,
                                   width=self.canvas.brush_width,
                                   apply_mode=True)
         if dlg.exec_() != QDialog.Accepted:
-            # отмена: возвращаем состояние кнопки
             self.act_brush.setChecked(was_active)
             if was_active:
                 self.activate_brush()
@@ -2636,7 +2641,6 @@ class MainWindow(QMainWindow):
         self.activate_brush()
 
     def on_eraser_action(self):
-        """Клик по кнопке Ластик: открываем диалог, потом активируем."""
         was_active = self.canvas.tool == "eraser"
         dlg = EraserSettingsDialog(self,
                                    width=self.canvas.eraser_width,
@@ -2729,14 +2733,12 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        # ---- Кисть ----
         self.act_brush = QAction(make_icon("brush"), "  Кисть", self)
         self.act_brush.setCheckable(True)
         self.act_brush.setToolTip("Кисть (откроется диалог настроек)")
         self.act_brush.triggered.connect(self.on_brush_action)
         tb.addAction(self.act_brush)
 
-        # ---- Ластик ----
         self.act_eraser = QAction(make_icon("eraser"), "  Ластик", self)
         self.act_eraser.setCheckable(True)
         self.act_eraser.setToolTip("Ластик (откроется диалог настроек)")
@@ -2744,7 +2746,6 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_eraser)
 
     def copy_canvas_to_clipboard(self):
-        """Копирует всё содержимое холста в системный буфер обмена."""
         try:
             img = self.canvas.render_to_image()
             QApplication.clipboard().setImage(img)
