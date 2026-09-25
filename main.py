@@ -32,7 +32,8 @@ from PyQt5.QtGui import (
     QTextOption
 )
 from PyQt5.QtCore import (
-    Qt, QPoint, QRect, QRectF, QSize, pyqtSignal, QEvent, QTimer
+    Qt, QPoint, QPointF, QRect, QRectF, QSize,
+    pyqtSignal, QEvent, QTimer
 )
 
 # ---------- Пути ----------
@@ -102,6 +103,10 @@ def make_icon(name, size=28, color="#e0e0e0"):
         p.drawRect(6, 4, s - 12, s - 8)
         p.drawRect(9, 4, s - 18, 8)
         p.drawRect(10, s - 12, s - 20, 6)
+    elif name == "copy":
+        p.drawRect(6, 8, s - 14, s - 14)
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(10, 4, s - 14, s - 14)
     elif name == "front":
         p.drawRect(4, 4, s - 10, s - 10)
         p.setBrush(QColor(color))
@@ -159,6 +164,42 @@ def make_icon(name, size=28, color="#e0e0e0"):
         p.drawArc(6, 6, s - 12, s - 12, 30 * 16, 270 * 16)
         p.setBrush(QColor(color))
         p.drawPolygon(QPoint(s - 6, 6), QPoint(s - 12, 10), QPoint(s - 6, 14))
+    elif name == "brush":
+        p.save()
+        p.translate(s // 2, s // 2)
+        p.rotate(-45)
+        p.translate(-s // 2, -s // 2)
+        p.drawRect(s // 2 - 3, 4, 6, s - 16)
+        p.setBrush(QColor(color))
+        p.drawPolygon(
+            QPoint(s // 2 - 3, s - 12),
+            QPoint(s // 2 + 3, s - 12),
+            QPoint(s // 2 + 1, s - 5),
+            QPoint(s // 2 - 1, s - 5),
+        )
+        p.restore()
+        p.setPen(QPen(QColor(color), 3))
+        p.drawLine(4, s - 5, s - 10, s - 5)
+    elif name == "eraser":
+        p.save()
+        p.translate(s // 2, s // 2)
+        p.rotate(-30)
+        p.translate(-s // 2, -s // 2)
+        p.setBrush(QColor("#f2c94c"))
+        p.drawPolygon(
+            QPoint(6, s - 10),
+            QPoint(s - 10, s - 10),
+            QPoint(s - 6, s - 20),
+            QPoint(10, s - 20),
+        )
+        p.setBrush(QColor("#d9d9d9"))
+        p.drawPolygon(
+            QPoint(6, s - 10),
+            QPoint(s - 10, s - 10),
+            QPoint(s - 12, s - 6),
+            QPoint(8, s - 6),
+        )
+        p.restore()
     p.end()
     return QIcon(pix)
 
@@ -457,6 +498,10 @@ class Canvas(QWidget):
 
         self.doc_size = QSize(800, 600)
         self.bg_color = Qt.transparent
+
+        self.paint_layer = QImage(self.doc_size, QImage.Format_ARGB32)
+        self.paint_layer.fill(Qt.transparent)
+
         self.items = []
         self.selected_items = []
         self.mode = None
@@ -478,14 +523,73 @@ class Canvas(QWidget):
         self._last_click_item = None
         self._last_click_pos = QPoint()
 
-        # ---- inline-редактирование текста ----
         self.inline_edit = None
         self.inline_item = None
         self._inline_committing = False
 
-    # ============================================================
-    #              INLINE-РЕДАКТИРОВАНИЕ ТЕКСТА
-    # ============================================================
+        self.tool = "select"
+        self.brush_color = QColor(255, 80, 80)
+        self.brush_width = 15
+        self.eraser_width = 25
+        self._stroke_active = False
+        self._stroke_last_pt = None
+        self._stroke_snapshot_taken = False
+
+    # ---- инструменты ----
+    def set_tool(self, tool: str):
+        self.commit_inline_edit()
+        self.tool = tool
+        if tool == "brush":
+            self.setCursor(Qt.CrossCursor)
+        elif tool == "eraser":
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def set_brush_color(self, color: QColor):
+        self.brush_color = QColor(color)
+
+    def set_brush_width(self, w: int):
+        self.brush_width = max(1, min(30, int(w)))
+
+    def set_eraser_width(self, w: int):
+        self.eraser_width = max(10, min(50, int(w)))
+
+    # ---- рисование / ластик ----
+    def _start_stroke(self, doc_pt: QPointF):
+        if not self._stroke_snapshot_taken:
+            self.push_history()
+            self._stroke_snapshot_taken = True
+        self._stroke_active = True
+        self._stroke_last_pt = doc_pt
+        self._draw_segment(doc_pt, doc_pt)
+
+    def _end_stroke(self):
+        self._stroke_active = False
+        self._stroke_last_pt = None
+        self._stroke_snapshot_taken = False
+
+    def _draw_segment(self, pt1: QPointF, pt2: QPointF):
+        painter = QPainter(self.paint_layer)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if self.tool == "brush":
+            pen = QPen(self.brush_color, self.brush_width,
+                       Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        elif self.tool == "eraser":
+            pen = QPen(QColor(0, 0, 0, 255), self.eraser_width,
+                       Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+        else:
+            painter.end()
+            return
+        painter.setPen(pen)
+        painter.drawLine(pt1, pt2)
+        painter.end()
+        self.update()
+
+    # ---- inline-редактирование ----
     def start_inline_edit(self, item: TextItem):
         if self.inline_edit is not None:
             self.commit_inline_edit()
@@ -496,14 +600,9 @@ class Canvas(QWidget):
         self.inline_edit = QTextEdit(self)
         self.inline_edit.setPlainText(item.text)
         self.inline_edit.setStyleSheet(
-            "QTextEdit{"
-            "  background:#1e2a3a;"
-            "  color:#fff;"
-            "  border:2px solid #5a9cff;"
-            "  border-radius:4px;"
-            "  padding:2px 6px;"
-            "  selection-background-color:#5a9cff;"
-            "}")
+            "QTextEdit{background:#1e2a3a;color:#fff;"
+            "border:2px solid #5a9cff;border-radius:4px;"
+            "padding:2px 6px;selection-background-color:#5a9cff;}")
 
         scale = self.zoom
         font_size_px = max(8, int(item.font_size *
@@ -525,7 +624,6 @@ class Canvas(QWidget):
 
         self.inline_edit.setFocus()
         self.inline_edit.selectAll()
-
         self.inline_edit.focusOutEvent = self._inline_focus_out
         self.inline_edit.show()
 
@@ -542,12 +640,10 @@ class Canvas(QWidget):
                 return
             new_text = self.inline_edit.toPlainText()
             item = self.inline_item
-
             if new_text.strip() and new_text != item.text:
                 self.push_history()
                 item.set_text_inline(new_text)
                 self.document_changed.emit()
-
             self.inline_edit.hide()
             self.inline_edit.deleteLater()
             self.inline_edit = None
@@ -584,11 +680,11 @@ class Canvas(QWidget):
             return True
         return False
 
-    # ============================================================
-    #              КОНТЕКСТНОЕ МЕНЮ
-    # ============================================================
+    # ---- контекстное меню ----
     def _show_context_menu(self, pos):
         if self.inline_edit is not None:
+            return
+        if self.tool in ("brush", "eraser"):
             return
         dpt = self.widget_to_doc(pos)
         clicked = None
@@ -608,8 +704,7 @@ class Canvas(QWidget):
 
         if clicked.kind == "text":
             act_inline = menu.addAction("Редактировать на холсте")
-            act_inline.triggered.connect(
-                lambda: self.start_inline_edit(clicked))
+            act_inline.triggered.connect(lambda: self.start_inline_edit(clicked))
             act_edit = menu.addAction("Настройки текста (F2)")
             act_edit.triggered.connect(
                 lambda: self.request_edit_text.emit(clicked))
@@ -630,18 +725,21 @@ class Canvas(QWidget):
 
         menu.exec_(self.mapToGlobal(pos))
 
-    # ============================================================
-    #              ИСТОРИЯ
-    # ============================================================
+    # ---- история ----
     def push_history(self):
-        self.history.append([it.clone() for it in self.items])
+        self.history.append({
+            "items": [it.clone() for it in self.items],
+            "paint": self.paint_layer.copy(),
+        })
         if len(self.history) > 100:
             self.history.pop(0)
 
     def undo(self):
         if not self.history:
             return
-        self.items = self.history.pop()
+        snap = self.history.pop()
+        self.items = snap["items"]
+        self.paint_layer = snap["paint"]
         for it in self.items:
             it.selected = False
         self.selected_items = []
@@ -652,6 +750,8 @@ class Canvas(QWidget):
     def new_document(self, w, h):
         self.commit_inline_edit()
         self.doc_size = QSize(w, h)
+        self.paint_layer = QImage(self.doc_size, QImage.Format_ARGB32)
+        self.paint_layer.fill(Qt.transparent)
         self.items.clear()
         self.selected_items = []
         self.zoom = 1.0
@@ -679,6 +779,11 @@ class Canvas(QWidget):
         r = self.doc_rect()
         return QPoint(int((pt.x() - r.x()) / self.zoom),
                       int((pt.y() - r.y()) / self.zoom))
+
+    def widget_to_doc_f(self, pt: QPoint) -> QPointF:
+        r = self.doc_rect()
+        return QPointF((pt.x() - r.x()) / self.zoom,
+                       (pt.y() - r.y()) / self.zoom)
 
     def _check_out_of_bounds(self, it):
         if it is None or it not in self.items:
@@ -944,6 +1049,23 @@ class Canvas(QWidget):
         self.update()
         self.document_changed.emit()
 
+    def render_to_image(self) -> QImage:
+        """Собирает полное изображение холста (фон + слой кисти + объекты)."""
+        out = QImage(self.doc_size, QImage.Format_ARGB32)
+        if self.bg_color != Qt.transparent and self.bg_color.alpha() > 0:
+            out.fill(self.bg_color)
+        else:
+            out.fill(Qt.transparent)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.setRenderHint(QPainter.TextAntialiasing, True)
+        p.drawImage(0, 0, self.paint_layer)
+        for it in self.items:
+            it.draw(p)
+        p.end()
+        return out
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(30, 30, 30))
@@ -968,6 +1090,9 @@ class Canvas(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.TextAntialiasing, True)
+
+        p.drawImage(0, 0, self.paint_layer)
+
         for it in self.items:
             if it is self.inline_item:
                 continue
@@ -976,6 +1101,18 @@ class Canvas(QWidget):
 
         p.setPen(QPen(QColor(120, 120, 120), 1))
         p.drawRect(dr)
+
+        if self.tool in ("brush", "eraser"):
+            cur = self.mapFromGlobal(self.cursor().pos())
+            if self.rect().contains(cur):
+                width = self.brush_width if self.tool == "brush" else self.eraser_width
+                radius = max(2, int(width * self.zoom / 2))
+                p.setBrush(Qt.NoBrush)
+                if self.tool == "brush":
+                    p.setPen(QPen(QColor(200, 200, 200, 200), 1))
+                else:
+                    p.setPen(QPen(QColor(242, 201, 76, 220), 1, Qt.DashLine))
+                p.drawEllipse(cur, radius, radius)
 
         for it in self.selected_items:
             if it is self.inline_item:
@@ -1027,7 +1164,13 @@ class Canvas(QWidget):
             self.pan_start = pos
             self.pan_offset_start = QPoint(self.pan_offset)
             return
+
         if event.button() != Qt.LeftButton:
+            return
+
+        if self.tool in ("brush", "eraser"):
+            dpt = self.widget_to_doc_f(pos)
+            self._start_stroke(dpt)
             return
 
         h = self._handle_at(pos)
@@ -1102,6 +1245,13 @@ class Canvas(QWidget):
             self.update()
             return
 
+        if self.tool in ("brush", "eraser") and self._stroke_active:
+            dpt = self.widget_to_doc_f(pos)
+            if self._stroke_last_pt is not None:
+                self._draw_segment(self._stroke_last_pt, dpt)
+            self._stroke_last_pt = dpt
+            return
+
         if self.mode == 'move' and self.selected_items:
             if not self.move_snapshot_done:
                 self.push_history()
@@ -1154,17 +1304,26 @@ class Canvas(QWidget):
             self.document_changed.emit()
             return
 
+        if self.tool in ("brush", "eraser"):
+            self.update()
+            return
+
         if self._handle_at(pos):
             self.setCursor(Qt.SizeFDiagCursor)
         else:
             self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
+        if self.tool in ("brush", "eraser") and self._stroke_active:
+            self._end_stroke()
+            self.document_changed.emit()
+            return
         if self.mode in ('move', 'resize'):
             self._check_all_out_of_bounds()
         self.mode = None
         self.resize_handle = None
-        self.setCursor(Qt.ArrowCursor)
+        if self.tool == "select":
+            self.setCursor(Qt.ArrowCursor)
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier:
@@ -1249,7 +1408,10 @@ class Canvas(QWidget):
             event.accept()
             return
         if key == Qt.Key_Escape:
-            self.select_single(None)
+            if self.tool in ("brush", "eraser"):
+                self.set_tool("select")
+            else:
+                self.select_single(None)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1496,11 +1658,112 @@ class ImageSettingsDialog(QDialog):
         self.item._processed_key = None
 
 
+class BrushSettingsDialog(QDialog):
+    def __init__(self, parent=None, color=None, width=15, apply_mode=False):
+        super().__init__(parent)
+        self.setWindowTitle("Кисть")
+        self.setStyleSheet("background:#2b2b2b; color:#eee;")
+        self.setMinimumWidth(320)
+        form = QFormLayout(self)
+
+        if apply_mode:
+            hint = QLabel("Настройте кисть и нажмите ОК, чтобы начать рисовать")
+            hint.setStyleSheet("color:#5a9cff;font-size:11px;")
+            hint.setWordWrap(True)
+            form.addRow("", hint)
+
+        self.color = QColor(color) if color else QColor(255, 80, 80)
+        self.color_btn = QPushButton("Цвет кисти")
+        self.color_btn.setStyleSheet(
+            f"background:{self.color.name()};color:#000;"
+            "padding:8px;border-radius:4px;font-weight:bold;")
+        self.color_btn.clicked.connect(self.pick_color)
+        form.addRow("", self.color_btn)
+
+        row = QHBoxLayout()
+        self.width_slider = QSlider(Qt.Horizontal)
+        self.width_slider.setRange(1, 30)
+        self.width_slider.setValue(width)
+        self.width_slider.setStyleSheet(
+            "QSlider::groove:horizontal{height:6px;background:#3a3a3a;}"
+            "QSlider::handle:horizontal{background:#5a9cff;width:14px;"
+            "margin:-4px 0;border-radius:7px;}")
+        self.width_lbl = QLabel(f"{width} px")
+        self.width_lbl.setFixedWidth(50)
+        self.width_lbl.setStyleSheet("color:#ccc;")
+        self.width_slider.valueChanged.connect(
+            lambda v: self.width_lbl.setText(f"{v} px"))
+        row.addWidget(self.width_slider)
+        row.addWidget(self.width_lbl)
+        form.addRow("Толщина:", row)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        form.addRow(bb)
+
+    def pick_color(self):
+        c = QColorDialog.getColor(self.color, self, "Цвет кисти")
+        if c.isValid():
+            self.color = c
+            self.color_btn.setStyleSheet(
+                f"background:{c.name()};color:#000;"
+                "padding:8px;border-radius:4px;font-weight:bold;")
+
+    def values(self):
+        return self.color, self.width_slider.value()
+
+
+class EraserSettingsDialog(QDialog):
+    def __init__(self, parent=None, width=25, apply_mode=False):
+        super().__init__(parent)
+        self.setWindowTitle("Ластик")
+        self.setStyleSheet("background:#2b2b2b; color:#eee;")
+        self.setMinimumWidth(320)
+        form = QFormLayout(self)
+
+        if apply_mode:
+            hint = QLabel("Настройте толщину и нажмите ОК, чтобы начать стирать")
+            hint.setStyleSheet("color:#f2c94c;font-size:11px;")
+            hint.setWordWrap(True)
+            form.addRow("", hint)
+
+        row = QHBoxLayout()
+        self.width_slider = QSlider(Qt.Horizontal)
+        self.width_slider.setRange(10, 50)
+        self.width_slider.setValue(width)
+        self.width_slider.setStyleSheet(
+            "QSlider::groove:horizontal{height:6px;background:#3a3a3a;}"
+            "QSlider::handle:horizontal{background:#f2c94c;width:14px;"
+            "margin:-4px 0;border-radius:7px;}")
+        self.width_lbl = QLabel(f"{width} px")
+        self.width_lbl.setFixedWidth(50)
+        self.width_lbl.setStyleSheet("color:#ccc;")
+        self.width_slider.valueChanged.connect(
+            lambda v: self.width_lbl.setText(f"{v} px"))
+        row.addWidget(self.width_slider)
+        row.addWidget(self.width_lbl)
+        form.addRow("Толщина:", row)
+
+        hint2 = QLabel("Ластик удаляет только линии, нарисованные кистью.")
+        hint2.setStyleSheet("color:#888;font-size:11px;")
+        hint2.setWordWrap(True)
+        form.addRow("", hint2)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        form.addRow(bb)
+
+    def value(self):
+        return self.width_slider.value()
+
+
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Горячие клавиши и справка")
-        self.resize(640, 680)
+        self.resize(640, 720)
         self.setStyleSheet("background:#232323; color:#eee;")
 
         v = QVBoxLayout(self)
@@ -1529,32 +1792,37 @@ class HelpDialog(QDialog):
             ("Работа с макетом", [
                 ("Новый макет", "—", "Создать холст любого размера"),
                 ("Сохранить", "—", "Сохранить результат в папку done/"),
+                ("Копировать холст", "—", "Всё изображение в буфер обмена"),
                 ("Цвет фона", "—", "Выбрать цвет фона макета (с альфой)"),
                 ("Прозрачный фон", "—", "Сбросить фон на прозрачный"),
             ]),
+            ("Кисть и ластик", [
+                ("Кисть", "кнопка",
+                 "Откроются настройки: цвет + толщина 1–30 px"),
+                ("Ластик", "кнопка",
+                 "Откроются настройки: толщина 10–50 px"),
+                ("Отменить штрих", "Ctrl + Z", "Каждый штрих — один шаг"),
+                ("Выйти из режима", "Esc", "Вернуться в выделение"),
+            ]),
             ("Текст", [
                 ("Двойной клик по тексту", "2x ЛКМ",
-                 "Редактировать на холсте (писать, стирать)"),
-                ("Новая строка", "Enter",
-                 "Перенос на следующую строку"),
-                ("Применить при inline", "Ctrl + Enter",
-                 "Сохранить текст и закрыть"),
-                ("Применить", "клик вне поля",
-                 "Автоматическое сохранение"),
-                ("Отменить inline-правку", "Esc",
-                 "Вернуть исходный текст"),
+                 "Редактировать на холсте"),
+                ("Новая строка", "Enter", "Перенос строки"),
+                ("Применить inline", "Ctrl + Enter", "Сохранить и закрыть"),
+                ("Применить", "клик вне поля", "Автосохранение"),
+                ("Отменить inline", "Esc", "Вернуть исходный текст"),
                 ("Расширенные настройки", "F2 / ПКМ",
                  "Шрифт, размер, цвет, жирный / курсив"),
             ]),
             ("Объекты", [
-                ("Копировать", "Ctrl + C", "Копировать выделенные объекты"),
+                ("Копировать", "Ctrl + C", "Копировать выделенное"),
                 ("Вырезать", "Ctrl + X", "Вырезать в буфер"),
-                ("Вставить", "Ctrl + V", "Вставить из системного буфера"),
+                ("Вставить", "Ctrl + V", "Вставить из буфера"),
                 ("Выделить всё", "Ctrl + A", "Выделить все объекты"),
-                ("Дублировать", "Ctrl + D", "Дублировать выделенное"),
-                ("Удалить", "Del / Backspace", "Удалить выделенные объекты"),
+                ("Дублировать", "Ctrl + D", "Дублировать"),
+                ("Удалить", "Del / Backspace", "Удалить объект"),
                 ("Снять выделение", "Esc", "Снять выделение"),
-                ("Отменить", "Ctrl + Z", "Отменить последнее действие"),
+                ("Отменить", "Ctrl + Z", "Отменить действие"),
             ]),
             ("Перемещение и масштаб", [
                 ("Перемещение", "ЛКМ + drag", "Двигать объект"),
@@ -1564,17 +1832,16 @@ class HelpDialog(QDialog):
                 ("Панорама", "Средняя кнопка / колесо", "Прокрутить холст"),
             ]),
             ("Стили и слои", [
-                ("Слои", "кнопки в панели",
-                 "Вперёд / Назад / На передний / На задний"),
-                ("Отразить ⇋", "кнопка", "Отразить по горизонтали"),
-                ("Отразить ⇵", "кнопка", "Отразить по вертикали"),
+                ("Слои", "кнопки в панели", "Вперёд / Назад / На передний / На задний"),
+                ("Отразить гориз.", "кнопка", "Отразить по горизонтали"),
+                ("Отразить верт.", "кнопка", "Отразить по вертикали"),
                 ("Повернуть", "кнопка", "Повернуть на заданный угол"),
             ]),
             ("Полезно", [
-                ("Drag & Drop", "перетащить файл", "Добавить изображение на холст"),
+                ("Drag & Drop", "перетащить файл", "Добавить изображение"),
                 ("Скриншот", "Win + Shift + S → Ctrl+V", "Вставить скриншот"),
                 ("Свои шрифты", "папка font/", "Кладите .ttf/.otf"),
-                ("Clipart.Free", "вкладка Хранилище", "Поиск клипартов онлайн"),
+                ("Clipart.Free", "вкладка Хранилище", "Поиск клипартов"),
             ]),
         ]
 
@@ -2281,8 +2548,8 @@ class MainWindow(QMainWindow):
         self.status.setStyleSheet("background:#2b2b2b;color:#aaa;")
 
         _DEFAULT_HINT = (
-            "Двойной клик по тексту — редактировать  •  Enter — новая строка  •  "
-            "Ctrl+Enter — применить  •  Esc — отменить  •  F2 — настройки")
+            "Двойной клик по тексту — редактировать  •  Кисть/Ластик — рисование  •  "
+            "Ctrl+Z — отменить  •  Ctrl+колесо — зум")
 
         if _CREATED_DIRS:
             rel = ", ".join(os.path.relpath(d, BASE_DIR) for d in _CREATED_DIRS)
@@ -2345,6 +2612,63 @@ class MainWindow(QMainWindow):
         dlg = HelpDialog(self)
         dlg.exec_()
 
+    # ---------- BRUSH / ERASER: клик открывает настройки ----------
+    def on_brush_action(self):
+        """Клик по кнопке Кисть: открываем диалог, потом активируем."""
+        was_active = self.canvas.tool == "brush"
+        dlg = BrushSettingsDialog(self,
+                                  color=self.canvas.brush_color,
+                                  width=self.canvas.brush_width,
+                                  apply_mode=True)
+        if dlg.exec_() != QDialog.Accepted:
+            # отмена: возвращаем состояние кнопки
+            self.act_brush.setChecked(was_active)
+            if was_active:
+                self.activate_brush()
+            else:
+                self.deactivate_tools()
+            return
+        color, width = dlg.values()
+        self.canvas.set_brush_color(color)
+        self.canvas.set_brush_width(width)
+        self.act_eraser.setChecked(False)
+        self.act_brush.setChecked(True)
+        self.activate_brush()
+
+    def on_eraser_action(self):
+        """Клик по кнопке Ластик: открываем диалог, потом активируем."""
+        was_active = self.canvas.tool == "eraser"
+        dlg = EraserSettingsDialog(self,
+                                   width=self.canvas.eraser_width,
+                                   apply_mode=True)
+        if dlg.exec_() != QDialog.Accepted:
+            self.act_eraser.setChecked(was_active)
+            if was_active:
+                self.activate_eraser()
+            else:
+                self.deactivate_tools()
+            return
+        w = dlg.value()
+        self.canvas.set_eraser_width(w)
+        self.act_brush.setChecked(False)
+        self.act_eraser.setChecked(True)
+        self.activate_eraser()
+
+    def activate_brush(self):
+        self.canvas.set_tool("brush")
+        self.status.showMessage(
+            f"Кисть активна • цвет: {self.canvas.brush_color.name()} • "
+            f"толщина: {self.canvas.brush_width} px")
+
+    def activate_eraser(self):
+        self.canvas.set_tool("eraser")
+        self.status.showMessage(
+            f"Ластик активен • толщина: {self.canvas.eraser_width} px")
+
+    def deactivate_tools(self):
+        self.canvas.set_tool("select")
+        self.status.showMessage("Режим выделения")
+
     def _build_toolbar(self):
         tb = QToolBar("Инструменты")
         tb.setMovable(False)
@@ -2367,7 +2691,8 @@ class MainWindow(QMainWindow):
             }
             QToolButton:hover { background: #404040; border: 1px solid #5a9cff; }
             QToolButton:pressed { background: #2c2c2c; }
-            QToolButton:disabled { color: #666; }
+            QToolButton:checked { background: #5a9cff; color: #fff;
+                                  border: 1px solid #5a9cff; }
         """)
         self.addToolBar(tb)
         self.toolbar = tb
@@ -2383,6 +2708,8 @@ class MainWindow(QMainWindow):
         add_action("Новый макет", "new", self.new_doc)
         add_action("Изображение", "image", self.open_image)
         add_action("Сохранить", "save", self.save_canvas)
+        add_action("Копировать", "copy", self.copy_canvas_to_clipboard,
+                   "Скопировать всё содержимое холста в буфер обмена")
         add_action("Текст", "text", self.add_text)
         add_action("Цвет фона", "color", self.choose_bg_color)
         add_action("Прозрачный фон", "color_off", self.reset_bg_color)
@@ -2399,6 +2726,32 @@ class MainWindow(QMainWindow):
         add_action("Отразить гориз.", "flip_h", self.canvas.flip_selected_horizontal)
         add_action("Отразить верт.", "flip_v", self.canvas.flip_selected_vertical)
         add_action("Повернуть", "rotate", self.rotate_selected)
+
+        tb.addSeparator()
+
+        # ---- Кисть ----
+        self.act_brush = QAction(make_icon("brush"), "  Кисть", self)
+        self.act_brush.setCheckable(True)
+        self.act_brush.setToolTip("Кисть (откроется диалог настроек)")
+        self.act_brush.triggered.connect(self.on_brush_action)
+        tb.addAction(self.act_brush)
+
+        # ---- Ластик ----
+        self.act_eraser = QAction(make_icon("eraser"), "  Ластик", self)
+        self.act_eraser.setCheckable(True)
+        self.act_eraser.setToolTip("Ластик (откроется диалог настроек)")
+        self.act_eraser.triggered.connect(self.on_eraser_action)
+        tb.addAction(self.act_eraser)
+
+    def copy_canvas_to_clipboard(self):
+        """Копирует всё содержимое холста в системный буфер обмена."""
+        try:
+            img = self.canvas.render_to_image()
+            QApplication.clipboard().setImage(img)
+            self.status.showMessage(
+                f"Скопировано в буфер обмена ({img.width()}×{img.height()})")
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось скопировать: {e}")
 
     def choose_bg_color(self):
         current = self.canvas.bg_color
@@ -2511,18 +2864,7 @@ class MainWindow(QMainWindow):
             self, "Сохранить в done", default, "PNG (*.png);;JPEG (*.jpg)")
         if not path:
             return
-        out = QImage(self.canvas.doc_size, QImage.Format_ARGB32)
-        if self.canvas.bg_color != Qt.transparent and self.canvas.bg_color.alpha() > 0:
-            out.fill(self.canvas.bg_color)
-        else:
-            out.fill(Qt.transparent)
-        p = QPainter(out)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        p.setRenderHint(QPainter.TextAntialiasing, True)
-        for it in self.canvas.items:
-            it.draw(p)
-        p.end()
+        out = self.canvas.render_to_image()
         out.save(path)
         self.status.showMessage(f"Сохранено в done: {path}")
 
@@ -2569,8 +2911,6 @@ class MainWindow(QMainWindow):
                 f"Размер: {item.font_size}pt\n"
                 f"Rotation: {item.rotation:.1f}°\n"
                 f"Двойной клик — править на холсте\n"
-                f"Enter — новая строка\n"
-                f"Ctrl+Enter — применить\n"
                 f"F2 — расширенные настройки")
 
 
