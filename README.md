@@ -12,5 +12,5 @@ Simple, fast, offline-friendly, with built-in Clipart search.
 
 ---
 
-<img width="400" height="225" alt="2026-09-25 13-32-15" src="https://github.com/user-attachments/assets/8dcc6bd3-7e6e-4241-8a21-30faf5e1ae5b" />
+<img width="1000" height="600" alt="2026-09-25 13-32-15" src="https://github.com/user-attachments/assets/8dcc6bd3-7e6e-4241-8a21-30faf5e1ae5b" />
 
