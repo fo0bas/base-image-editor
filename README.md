@@ -13,6 +13,12 @@ Simple, fast, offline-friendly, with built-in Clipart search.
 ---
 
 
-https://github.com/user-attachments/assets/356ee9bf-6b0e-4d7f-9d36-fbb142b5a9eb
+
+
+https://github.com/user-attachments/assets/366dce45-11ee-4688-ba3c-ac034133cd6e
+
+
+
+
 
 
